@@ -1,36 +1,145 @@
-# capstone_gradtrust
-repository for segun-bake's capstone project: "Gradtrust"
+# GradTrust — Blockchain-Verified Academic Credentials
 
-## Python and Pip version
-`python=3.12.0`
-`pip=25.0.1`
+GradTrust is a decentralized platform for **issuing, holding and instantly verifying academic credentials**
+(diplomas, certificates) on Ethereum. Universities issue tamper-proof credentials on-chain, graduates
+carry them in their wallet, and employers can verify one in seconds without contacting the registrar.
 
-## Automatic Debugging
-create a .env file in the root directory with this line for automatic debugging:
+Built as a senior capstone project at Texas A&M University by a team of six.
 
-```FLASK_DEBUG=1```
+## The problem
 
-## Execute code
-Run these commands in the terminal:
+Degree verification today is slow, manual and easy to fake: diploma mills and forged transcripts are
+common, and confirming a credential often means emailing a registrar and waiting days. GradTrust replaces
+that with a cryptographic check against a public ledger.
 
-### Get all the dependencies
-1. Create a virtual environment (name it whatever you want)
-`python3 -m venv {name of virtual environment}`
+## How it works
 
-2. Activate the virtual environment (for Mac/Linux/WSL)
-`source {name of virtual environment}/bin/activate`
+GradTrust has three roles, each with its own dashboard:
 
-  if you are using Windows, use this command instead:
+| Role         | What they do                                                                 |
+| ------------ | ---------------------------------------------------------------------------- |
+| **Issuer**   | An accredited institution that signs and publishes credentials on-chain      |
+| **Holder**   | A graduate who views their credentials and shares them (including via an NFC-friendly profile link) |
+| **Verifier** | An employer or third party who checks a credential's authenticity by its hash |
 
-  `source {name of virtual environment}/Scripts/activate`
+```
+                ┌──────────────────────┐
+  Admins ──────►│   IssuerRegistry     │  Merkle root of all trusted issuers
+ (multi-sig)    └──────────┬───────────┘
+                           │ verifyIssuer(proof)
+                ┌──────────▼───────────┐
+  Issuer ──────►│ CredentialVerification│  credentialHash → {issuer, holder, issuedAt, data}
+                └──────────┬───────────┘
+                           │ pullCredential / verifyCredential
+          Holder ◄─────────┴─────────► Verifier
+```
 
-3. Install the dependencies
-`pip install -r requirements.txt`
+### Smart contracts (Solidity, Sepolia testnet)
 
-(Within the requirements.txt file, there are all the dependencies that are needed to run the application. Running the command above will install all these dependencies.)
+- **`IssuerRegistry.sol`** stores a single **Merkle root** representing every trusted issuer. Checking
+  whether an issuer is legitimate is an O(log n) Merkle-proof verification, so the issuer list never has
+  to be stored on-chain.
+- **`CredentialVerification.sol`** stores credentials keyed by their hash. The `onlyVerifiedIssuer`
+  modifier rejects any `storeCredential` call that doesn't include a valid Merkle proof for the issuer.
+  Holders can pull all their credentials, and anyone can call `verifyCredential(hash)`.
 
-### Run the application
-Enter the following command in the terminal to run the application:
-`flask run`
+### Security design
 
-In the terminal, you should see a message that states the application is running on a local server. Copy the link and paste it into your browser to view the application.
+- **Merkle-tree issuer allow-list.** Adding or removing an issuer only updates one 32-byte root on-chain.
+- **Multi-signature root updates.** Changes to the issuer registry require signed approval from several
+  admin wallets. Signatures are recovered server-side with `eth_account` and checked against the admin
+  set before the root is updated.
+- **Wallet-signed issuer registration.** Issuers prove control of their address by signing a message with
+  added entropy.
+- **JWT authentication** (header and cookie) with bcrypt-hashed, peppered passwords and role-based access
+  to each dashboard.
+
+## Tech stack
+
+| Layer           | Technologies                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| Smart contracts | Solidity 0.8.20, Hardhat, Ethereum Sepolia                          |
+| Backend         | Python 3.12, Flask, Flask-JWT-Extended, Flask-SocketIO, web3.py, PostgreSQL (SQLAlchemy / psycopg2) |
+| Frontend        | Next.js (App Router), TypeScript, Tailwind CSS, shadcn/ui, NextAuth |
+| DevOps          | GitHub Actions (Hardhat CI), Docker, Procfile-based deployment      |
+
+## Project structure
+
+```
+├── contracts/            # Solidity smart contracts
+├── scripts/deploy.js     # Hardhat deployment script
+├── test/                 # Hardhat tests (run in CI)
+├── backend/
+│   ├── app.py            # Flask app factory
+│   ├── routes/           # admin, admin_multi, issuer, holder, verifier, common blueprints
+│   ├── abis/             # Contract ABIs used by web3.py
+│   └── models.py         # SQLAlchemy models
+└── frontend/src/my-app/  # Next.js frontend (issuer, holder, verifier, admin dashboards)
+```
+
+## Getting started
+
+### Prerequisites
+
+- Python 3.12, Node.js 18+
+- A PostgreSQL database
+- A Sepolia RPC endpoint (e.g. Alchemy or Infura) and a funded deployer wallet
+
+### 1. Configure environment
+
+Create a `.env` file in the repository root:
+
+```env
+# Blockchain
+API_URL=<sepolia-rpc-url>
+PRIVATE_KEY=<deployer-wallet-private-key>
+NETWORK=sepolia
+ISSUER_REGISTRY_ADDRESS=<deployed-address>
+CREDENTIAL_VERIFICATION_ADDRESS=<deployed-address>
+
+# Backend
+CONNECTION_STRING=postgresql://<user>:<password>@<host>/<db>
+JWT_SECRET_KEY=<random-secret>
+SECRET_KEY=<random-secret>
+PEPPER=<random-secret>
+FRONTEND_ORIGIN=http://localhost:3000
+BACKEND_DEPLOYMENT=http://localhost:5000
+FLASK_DEBUG=1
+```
+
+### 2. Deploy the contracts
+
+```bash
+npm install
+npx hardhat compile
+npx hardhat test
+npx hardhat run scripts/deploy.js --network sepolia
+```
+
+Copy the printed contract addresses into `.env`.
+
+### 3. Run the backend
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+flask --app backend.app run
+```
+
+### 4. Run the frontend
+
+```bash
+cd frontend/src/my-app
+npm install
+npm run dev
+```
+
+## Team
+
+Gabriel Floreslovo · Segun Oluwole · Nathan Cornelius · Blake Dejohn · Joshua Wilson · Ezra Jeter
+
+## License
+
+See [LICENSE](LICENSE). This project is the original work of the GradTrust team and was submitted to
+fulfill academic requirements at Texas A&M University.
